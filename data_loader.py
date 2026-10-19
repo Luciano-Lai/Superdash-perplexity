@@ -184,13 +184,13 @@ def _calculate_guarantee_status(row):
     if pd.isna(warranty_date):
         return "Não informado"
 
-    today = pd.Timestamp(datetime.date.today())
+    today = pd.Timestamp.now().normalize()
 
     if warranty_date >= today:
         return "Dentro"
 
     return "Fora"
-
+    
 
 @st.cache_data(ttl=300)
 def load_and_normalize_data():
