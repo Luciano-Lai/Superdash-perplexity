@@ -1,3 +1,3 @@
-from ui import render_page
+from ui import render_clientes_regioes
 
-render_page("clientes_regioes")
+render_clientes_regioes()
