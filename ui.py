@@ -1,978 +1,368 @@
 import hashlib
 import math
 import unicodedata
-
 import streamlit as st
 
-from charts import (
-    render_evolution_chart,
-    render_horizontal_ranking,
-    render_donut_chart,
-    render_cut_donut,
-)
+from charts import render_evolution_chart, render_horizontal_ranking, render_donut_chart, render_cut_donut
 from filters import apply_filters, COLUMNS
-from kpis import calculate_kpis, render_kpi_cards
+from kpis import calculate_kpis, render_kpi_cards, occurrence_frame
 from pdf_export import generate_pdf_report
-
-
-PAGE_INFO = {
-    "monitoramento": (
-        "Monitoramento",
-        "Visão consolidada da operação no recorte selecionado.",
-    ),
-    "analise_tarefas": (
-        "Análise de tarefas",
-        "Volume, composição e serviços executados.",
-    ),
-    "maquinas": (
-        "Máquinas",
-        "Distribuição de atendimentos e ocorrências por equipamento.",
-    ),
-    "corretivas": (
-        "Corretivas",
-        "Problemas, peças e serviços de manutenção corretiva.",
-    ),
-    "clientes_regioes": (
-        "Clientes e regiões",
-        "Distribuição dos atendimentos por cliente e localização.",
-    ),
-}
-
-
-RANKINGS = {
-    "Tarefas por máquina": ("Rótulo da máquina", None),
-    "Preventivas por máquina": ("Rótulo da máquina", "Preventiva"),
-    "Corretivas por máquina": ("Rótulo da máquina", "Corretiva"),
-    "Tarefas por técnico": ("Técnico", None),
-    "Tarefas por cliente": ("Cliente", None),
-    "Tarefas por cidade": ("Cidade", None),
-    "Tarefas por região": ("Região", None),
-    "Tarefas por estado": ("Estado", None),
-    "Top problemas": ("Problema", "Corretiva"),
-    "Top peças": ("Peça", "Corretiva"),
-    "Top tarefas executadas": ("Tarefa", None),
-}
-
-
-PAGE_RANKINGS = {
-    "monitoramento": list(RANKINGS),
-    "analise_tarefas": [
-        "Top tarefas executadas",
-        "Tarefas por máquina",
-        "Tarefas por técnico",
-        "Tarefas por cliente",
-    ],
-    "maquinas": [
-        "Tarefas por máquina",
-        "Preventivas por máquina",
-        "Corretivas por máquina",
-        "Top problemas",
-        "Top peças",
-    ],
-    "corretivas": [
-        "Corretivas por máquina",
-        "Top problemas",
-        "Top peças",
-        "Top tarefas executadas",
-    ],
-    "clientes_regioes": [
-        "Tarefas por cliente",
-        "Tarefas por cidade",
-        "Tarefas por região",
-        "Tarefas por estado",
-        "Tarefas por máquina",
-    ],
-}
-
-
-ASSOCIATIONS = {
-    "Evolução no período": {
-        "Total de tarefas",
-        "Preventivas",
-        "Corretivas",
-        "% Preventivas",
-        "% Corretivas",
-    },
-    "Tarefas por máquina": {
-        "Total de tarefas",
-        "Máquinas atendidas",
-    },
-    "Preventivas por máquina": {
-        "Preventivas",
-        "% Preventivas",
-    },
-    "Corretivas por máquina": {
-        "Corretivas",
-        "% Corretivas",
-    },
-    "Tarefas por técnico": {
-        "Total de tarefas",
-        "Técnicos envolvidos",
-    },
-    "Tarefas por cliente": {
-        "Total de tarefas",
-        "Máquinas atendidas",
-    },
-    "Tarefas por cidade": {
-        "Total de tarefas",
-        "Máquinas atendidas",
-    },
-    "Tarefas por região": {
-        "Total de tarefas",
-        "Máquinas atendidas",
-    },
-    "Tarefas por estado": {
-        "Total de tarefas",
-        "Máquinas atendidas",
-    },
-    "Top problemas": {
-        "Corretivas",
-        "Problema mais frequente",
-    },
-    "Top peças": {
-        "Corretivas",
-        "Peça mais trocada",
-    },
-    "Top tarefas executadas": {
-        "Total de tarefas",
-    },
-    "Participação do recorte no universo": {
-        "Total de tarefas",
-    },
-}
+from comparison import comparison_base, split_machines, comparison_evolution, comparison_bars, comparison_share, comparison_occurrences
 
 
 def apply_theme():
-    css = """
-    <style>
-    .block-container {
-        max-width: 1550px;
-        padding-top: 2rem;
-        padding-bottom: 3rem;
-    }
-
-    .kpi-card {
-        background: var(--secondary-background-color, #FFFFFF);
-        border: 1px solid #DCE4EC;
-        border-radius: 12px;
-        padding: 18px;
-        min-height: 145px;
-        box-sizing: border-box;
-        margin-bottom: 14px;
-    }
-
-    .kpi-label {
-        font-size: 0.83rem;
-        opacity: 0.8;
-        margin-bottom: 12px;
-    }
-
-    .kpi-value {
-        font-weight: 650;
-        line-height: 1.25;
-        overflow-wrap: anywhere;
-    }
-    </style>
-    """
-    st.markdown(css, unsafe_allow_html=True)
+    st.markdown("""<style>
+.block-container{max-width:1550px;padding-top:2rem;padding-bottom:3rem}
+.kpi-card{background:var(--secondary-background-color,#fff);border:1px solid #DCE4EC;border-radius:12px;padding:18px;min-height:145px;box-sizing:border-box;margin-bottom:14px}
+.kpi-label{font-size:.83rem;opacity:.8;margin-bottom:12px}
+.kpi-value{font-weight:650;line-height:1.25;overflow-wrap:anywhere}
+</style>""", unsafe_allow_html=True)
 
 
-def persist_widget(kind, label, key, **kwargs):
-    saved_key = key + "_saved"
-    options = kwargs.get("options")
-
-    if saved_key in st.session_state:
-        value = st.session_state[saved_key]
-
+def widget(kind,label,key,**kwargs):
+    saved=key+"_saved"
+    if saved in st.session_state:
+        value=st.session_state[saved]
+        options=kwargs.get("options")
         if options is not None:
-            options = list(options)
-
-            if kind == "multiselect":
-                value = [
-                    item
-                    for item in value
-                    if item in options
-                ]
-            elif options and value not in options:
-                value = options[0]
-
-        st.session_state[key] = value
-        kwargs.pop("default", None)
-        kwargs.pop("value", None)
-
-    def save_value():
-        st.session_state[saved_key] = st.session_state[key]
-
-    widget = getattr(st, kind)
-
-    value = widget(
-        label,
-        key=key,
-        on_change=save_value,
-        **kwargs,
-    )
-
-    st.session_state[saved_key] = value
-    return value
-
-
-def normalize_header(value):
-    text = unicodedata.normalize(
-        "NFKD",
-        str(value).strip().lower(),
-    )
-
-    text = "".join(
-        character
-        for character in text
-        if not unicodedata.combining(character)
-    )
-
-    return " ".join(text.split())
-
-
-def detail_columns(columns):
-    markers = {
-        "codigo do patrimonio",
-        "codigo de patrimonio",
-        "codigo patrimonio",
-        "cod. patrimonio",
-        "cod patrimonio",
-    }
-
-    cutoff = next(
-        (
-            index
-            for index, column in enumerate(columns)
-            if normalize_header(column) in markers
-        ),
-        None,
-    )
-
-    if cutoff is not None:
-        selected = list(columns[:cutoff])
-
-        selected = [
-            column
-            for column in selected
-            if column not in {
-                "Rótulo da máquina",
-                "Seleção da máquina",
-            }
-        ]
-    else:
-        preferred = [
-            "Data da tarefa",
-            "Nome da máquina",
-            "Máquina",
-            "Tipo",
-            "Técnico",
-            "Cliente",
-            "Cidade",
-            "Região",
-            "Estado",
-            "Problema",
-            "Tarefa",
-            "Peça",
-            "Observações",
-        ]
-
-        selected = [
-            column
-            for column in preferred
-            if column in columns
-        ]
-
-    if "Garantia" in columns and "Garantia" not in selected:
-        selected.append("Garantia")
-
-    return selected, cutoff is not None
-
-
-def render_detail(df, page_id, signature):
-    with st.expander(
-        "Detalhamento dos registros",
-        expanded=False,
-    ):
-        columns, marker_found = detail_columns(
-            list(df.columns)
-        )
-
-        if not marker_found:
-            st.caption(
-                "Cabeçalho de patrimônio não localizado. "
-                "Exibindo somente as colunas essenciais, "
-                "sem campos adicionais do cadastro."
-            )
-
-        prefix = "dash_" + page_id + "_detail"
-
-        page_size = st.selectbox(
-            "Registros por página",
-            [15, 25, 50, 100],
-            key=prefix + "_size",
-        )
-
-        pagination_signature = (
-            signature + ":" + str(page_size)
-        )
-
-        if (
-            st.session_state.get(prefix + "_signature")
-            != pagination_signature
-        ):
-            st.session_state[prefix + "_page"] = 1
-            st.session_state[prefix + "_signature"] = (
-                pagination_signature
-            )
-
-        total_pages = max(
-            1,
-            math.ceil(len(df) / page_size),
-        )
-
-        page_key = prefix + "_page"
-
-        stored_page = st.session_state.get(page_key, 1)
-
-        if stored_page < 1 or stored_page > total_pages:
-            st.session_state[page_key] = 1
-
-        current_page = st.number_input(
-            "Página",
-            min_value=1,
-            max_value=total_pages,
-            step=1,
-            key=page_key,
-        )
-
-        current_page = int(current_page)
-
-        ordered = df.sort_values(
-            "Data da tarefa",
-            ascending=False,
-        )
-
-        first = (current_page - 1) * page_size
-        last = current_page * page_size
-
-        st.caption(
-            f"{len(df)} registros • "
-            f"página {current_page} de {total_pages}"
-        )
-
-        st.dataframe(
-            ordered.iloc[first:last][columns],
-            hide_index=True,
-            use_container_width=True,
-        )
-
-
-def render_export(
-    figures,
-    associations,
-    values,
-    page_id,
-):
-    prefix = "dash_" + page_id + "_pdf_"
-
-    selected_charts = persist_widget(
-        "multiselect",
-        "Gráficos para o PDF",
-        prefix + "charts",
-        options=list(figures),
-        default=[],
-    )
-
-    if selected_charts:
-        allowed_kpis = set()
-
-        for name in selected_charts:
-            allowed_kpis.update(
-                associations.get(name, set())
-            )
-    else:
-        allowed_kpis = set(values)
-
-    selected_kpis = persist_widget(
-        "multiselect",
-        "Indicadores para o PDF",
-        prefix + "kpis",
-        options=[
-            name
-            for name in values
-            if name in allowed_kpis
-        ],
-        default=[],
-    )
-
-    st.caption(
-        "Sem gráficos selecionados, você pode exportar "
-        "apenas indicadores. Com gráficos selecionados, "
-        "aparecem somente os indicadores associados."
-    )
-
-    charts_per_page = persist_widget(
-        "selectbox",
-        "Gráficos por página",
-        prefix + "count",
-        options=[1, 2, 3, 4],
-    )
-
-    generate = st.button(
-        "Gerar PDF",
-        key=prefix + "generate",
-        disabled=not (
-            selected_charts or selected_kpis
-        ),
-    )
-
-    if generate:
-        try:
-            chosen_figures = {
-                name: figures[name]
-                for name in selected_charts
-            }
-
-            pdf = generate_pdf_report(
-                values,
-                selected_kpis,
-                chosen_figures,
-                charts_per_page,
-            )
-
-            st.download_button(
-                label="Baixar PDF",
-                data=pdf,
-                file_name="painel_" + page_id + ".pdf",
-                mime="application/pdf",
-                key=prefix + "download",
-            )
-
-        except Exception as error:
-            st.error(
-                "A exportação não foi concluída. "
-                "Confira as dependências do PDF no servidor."
-            )
-            st.code(str(error))
-
-
-def render_filter_summary(context):
-    spec = context["spec"]
-    parts = []
-
-    for column in ["Tipo"] + list(COLUMNS):
-        selection = spec.get(column)
-
-        if not selection:
-            continue
-
-        if isinstance(selection, str):
-            if selection == "Todas":
-                continue
-            display = selection
-
-        else:
-            if column == "Máquina":
-                labels = dict(
-                    zip(
-                        context["raw"]["Máquina"],
-                        context["raw"]["Seleção da máquina"],
-                    )
-                )
-
-                selection = [
-                    labels.get(value, value)
-                    for value in selection
-                ]
-
-            display = ", ".join(
-                str(value)
-                for value in selection
-            )
-
-        parts.append(column + ": " + display)
-
-    if parts:
-        st.caption(" | ".join(parts))
-
-
-def available_chart_names(df, page_id):
-    available = ["Evolução no período"]
-
-    for name in PAGE_RANKINGS[page_id]:
-        column, maintenance_type = RANKINGS[name]
-
-        if maintenance_type:
-            source = df.loc[
-                df["Tipo"].eq(maintenance_type)
-            ]
-        else:
-            source = df
-
-        if column not in source.columns:
-            continue
-
-        has_values = (
-            source[column]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .ne("")
-            .any()
-        )
-
-        if has_values:
-            available.append(name)
-
-    available.append(
-        "Participação do recorte no universo"
-    )
-
-    return available
-
-
-def render_evolution(df, spec, key):
-    left, right = st.columns(2)
-
-    with left:
-        granularity = persist_widget(
-            "selectbox",
-            "Agrupamento",
-            key + "_gran",
-            options=[
-                "Diária",
-                "Semanal",
-                "Mensal",
-            ],
-        )
-
-    with right:
-        chart_type = persist_widget(
-            "selectbox",
-            "Visual",
-            key + "_visual",
-            options=[
-                "Barras",
-                "Linha",
-                "Barras + linha acumulada",
-            ],
-        )
-
-    return render_evolution_chart(
-        df,
-        granularity,
-        chart_type,
-        spec["period"],
-    )
-
-
-def render_universe(df, context, page_id, key):
-    spec = context["spec"]
-
-    mode = persist_widget(
-        "selectbox",
-        "Universo de comparação",
-        key + "_universe",
-        options=[
-            "Todas as tarefas no período",
-            "Mesmo tipo no período",
-            "Personalizado",
-        ],
-    )
-
-    universe_spec = {
-        "period": spec["period"],
-        "Tipo": "Todas",
-    }
-
-    if mode == "Mesmo tipo no período":
-        if page_id == "corretivas":
-            universe_spec["Tipo"] = "Corretiva"
-        else:
-            universe_spec["Tipo"] = spec["Tipo"]
-
-    elif mode == "Personalizado":
-        candidates = []
-
-        for column in ["Tipo"] + list(COLUMNS):
-            value = spec.get(column)
-
-            if not value:
-                continue
-
-            if isinstance(value, str) and value == "Todas":
-                continue
-
-            candidates.append(column)
-
-        keep = persist_widget(
-            "multiselect",
-            "Manter filtros ativos no universo",
-            key + "_keep",
-            options=candidates,
-            default=[],
-        )
-
-        for column in keep:
-            universe_spec[column] = spec[column]
-
-    universe = apply_filters(
-        context["raw"],
-        universe_spec,
-    )
-
-    st.caption(
-        f"Universo: {len(universe)} tarefas • "
-        f"recorte: {len(df)} tarefas • mesmo período."
-    )
-
-    if page_id == "corretivas":
-        st.caption(
-            "Nesta página, o recorte contém somente corretivas. "
-            "O universo segue a opção escolhida acima."
-        )
-
-    return render_cut_donut(
-        universe,
-        df,
-    )
-
-
-def render_ranking_block(
-    df,
-    name,
-    key,
-    top_n_global,
-):
-    column, maintenance_type = RANKINGS[name]
-
-    if maintenance_type:
-        source = df.loc[
-            df["Tipo"].eq(maintenance_type)
-        ]
-    else:
-        source = df
-
-    with st.expander("Ajustes deste gráfico"):
-        override = persist_widget(
-            "checkbox",
-            "Definir Top N individual",
-            key + "_override",
-            value=False,
-        )
-
-        if override:
-            top_n = persist_widget(
-                "number_input",
-                "Top N individual",
-                key + "_n",
-                min_value=1,
-                max_value=100,
-                value=10,
-            )
-        else:
-            top_n = top_n_global
-
-        show_distribution = persist_widget(
-            "checkbox",
-            "Exibir distribuição ao lado",
-            key + "_pair",
-            value=False,
-        )
-
-        show_others = persist_widget(
-            "checkbox",
-            "Agrupar restante em Outras",
-            key + "_others",
-            value=True,
-        )
-
-    figure = render_horizontal_ranking(
-        source,
-        column,
-        name,
-        top_n,
-    )
-
-    result = {name: figure}
-
-    if show_distribution:
-        left, right = st.columns([1.35, 1])
-
-        left.plotly_chart(
-            figure,
-            use_container_width=True,
-        )
-
-        donut = render_donut_chart(
-            source,
-            column,
-            "Distribuição no recorte",
-            top_n,
-            show_others,
-        )
-
-        right.plotly_chart(
-            donut,
-            use_container_width=True,
-        )
-
-        result[name + " — distribuição"] = donut
-
-    else:
-        st.plotly_chart(
-            figure,
-            use_container_width=True,
-        )
-
+            if kind=="multiselect":
+                value=[v for v in value if v in options]
+            elif len(options) and value not in options:
+                value=options[0]
+        st.session_state[key]=value
+        kwargs.pop("default",None)
+        kwargs.pop("value",None)
+    def save():
+        st.session_state[saved]=st.session_state[key]
+    result=getattr(st,kind)(label,key=key,on_change=save,**kwargs)
+    st.session_state[saved]=result
     return result
 
 
-def render_page(page_id):
-    if page_id not in PAGE_INFO:
-        st.error("Página não reconhecida.")
-        return
-
-    title, subtitle = PAGE_INFO[page_id]
-
+def context(page_id,title,subtitle,corrective=False):
     st.title(title)
     st.caption(subtitle)
-
-    context = st.session_state.get("_page_context")
-
-    if context is None:
-        st.error(
-            "O contexto da página não foi inicializado. "
-            "Abra o aplicativo pelo app.py."
-        )
-        return
-
-    if not context["valid"] or not context["additional"]:
-        st.info(
-            "Selecione o período e pelo menos um filtro "
-            "adicional para visualizar os indicadores."
-        )
-        return
-
-    df = context["cut"].copy()
-
-    if page_id == "corretivas":
-        st.caption(
-            "Escopo desta página: somente corretivas, "
-            "respeitando os filtros comuns."
-        )
-
-        df = df.loc[
-            df["Tipo"].eq("Corretiva")
-        ].copy()
-
-    if df.empty:
-        st.info(
-            "Nenhum registro encontrado para os filtros "
-            "selecionados nesta página."
-        )
-        return
-
-    spec = context["spec"]
-    start, end = spec["period"]
-
-    st.caption(
-        f"{start:%d/%m/%Y} a {end:%d/%m/%Y} • "
-        f"{len(df)} tarefas no recorte"
-    )
-
-    render_filter_summary(context)
-
-    prefix = "dash_" + page_id + "_"
-    values = calculate_kpis(df)
-
-    with st.expander(
-        "Personalizar indicadores",
-        expanded=False,
-    ):
-        selected_kpis = persist_widget(
-            "multiselect",
-            "Indicadores exibidos",
-            prefix + "kpis",
-            options=list(values),
-            default=[],
-        )
-
-    if selected_kpis:
-        st.subheader("Resumo do período")
-
-        render_kpi_cards(
-            selected_kpis,
-            values,
-        )
-
-    else:
-        st.info(
-            "Selecione ao menos um indicador "
-            "em Personalizar indicadores."
-        )
-
-    available = available_chart_names(
-        df,
-        page_id,
-    )
-
-    with st.expander(
-        "Visualizações e exportação",
-        expanded=True,
-    ):
-        selected_charts = persist_widget(
-            "multiselect",
-            "Gráficos exibidos",
-            prefix + "charts",
-            options=available,
-            default=[],
-            disabled=not selected_kpis,
-        )
-
-        left, right = st.columns(2)
-
-        with left:
-            if st.button(
-                "Selecionar tudo",
-                key=prefix + "select_all",
-                disabled=not selected_kpis,
-            ):
-                st.session_state[
-                    prefix + "charts_saved"
-                ] = list(available)
-
-                st.rerun()
-
-        with right:
-            if st.button(
-                "Limpar seleção de gráficos",
-                key=prefix + "clear_charts",
-            ):
-                st.session_state[
-                    prefix + "charts_saved"
-                ] = []
-
-                st.rerun()
-
-        top_n_global = persist_widget(
-            "number_input",
-            "Top N padrão global",
-            "dash_global_top",
-            min_value=1,
-            max_value=100,
-            value=10,
-        )
-
-        export_slot = st.container()
-
-    figures = {}
-    associations = {}
-
-    charts_to_render = (
-        selected_charts
-        if selected_kpis
-        else []
-    )
-
-    for name in charts_to_render:
-        st.subheader(name)
-
-        chart_hash = hashlib.sha1(
-            name.encode("utf-8")
-        ).hexdigest()[:10]
-
-        key = prefix + chart_hash
-
-        associated_kpis = ASSOCIATIONS.get(
-            name,
-            {"Total de tarefas"},
-        )
-
-        if name == "Evolução no período":
-            figure = render_evolution(
-                df,
-                spec,
-                key,
-            )
-
-            st.plotly_chart(
-                figure,
-                use_container_width=True,
-            )
-
-            figures[name] = figure
-            associations[name] = associated_kpis
-
-        elif name == "Participação do recorte no universo":
-            figure = render_universe(
-                df,
-                context,
-                page_id,
-                key,
-            )
-
-            st.plotly_chart(
-                figure,
-                use_container_width=True,
-            )
-
-            figures[name] = figure
-            associations[name] = associated_kpis
-
+    ctx=st.session_state.get("_page_context")
+    if ctx is None:
+        st.error("Abra o aplicativo pelo app.py da revisão com menu superior.")
+        return None
+    if not ctx["valid"] or not ctx["additional"]:
+        st.info("Selecione o período e pelo menos um filtro adicional na barra lateral.")
+        return None
+    data=ctx["cut"].copy()
+    if corrective:
+        data=data.loc[data["Tipo"].eq("Corretiva")].copy()
+    if data.empty and page_id!="maquinas":
+        st.info("Nenhum registro encontrado neste recorte.")
+        return None
+    spec=ctx["spec"]
+    start,end=spec["period"]
+    st.caption(f"{start:%d/%m/%Y} a {end:%d/%m/%Y} • {len(data)} tarefas no recorte global")
+    labels=dict(zip(ctx["raw"]["Máquina"],ctx["raw"]["Seleção da máquina"]))
+    active=[]
+    for col in ["Tipo"]+list(COLUMNS):
+        selected=spec.get(col)
+        if not selected or (isinstance(selected,str) and selected=="Todas"):
+            continue
+        if isinstance(selected,str):
+            text=selected
         else:
-            ranking_figures = render_ranking_block(
-                df,
-                name,
-                key,
-                top_n_global,
-            )
+            text=", ".join(labels.get(v,v) if col=="Máquina" else str(v) for v in selected)
+        active.append(col+": "+text)
+    if active: st.caption(" | ".join(active))
+    return {"id":page_id,"raw":ctx["raw"],"spec":spec,"df":data,"figures":{},"associations":{},"key":"dash_"+page_id+"_"}
 
-            for figure_name, figure in ranking_figures.items():
-                figures[figure_name] = figure
-                associations[figure_name] = associated_kpis
 
-    with export_slot:
-        st.markdown("Exportação PDF")
+def registry(c,name,fig,kpis):
+    if fig is None:
+        st.info("Sem ocorrências válidas para esta análise.")
+        return
+    c["figures"][name]=fig
+    c["associations"][name]=set(kpis)
+    st.plotly_chart(fig,use_container_width=True)
 
-        render_export(
-            figures,
-            associations,
-            values,
-            page_id,
-        )
 
-    if any(
-        "garantia" in name.lower()
-        for name in selected_kpis
-    ):
-        st.caption(
-            "Garantia: a base atual utiliza a situação "
-            "da data limite em relação a hoje. "
-            "A cobertura histórica da chamada "
-            "ainda precisa ser validada."
-        )
+def configuration(c,kpi_options,chart_options):
+    values=calculate_kpis(c["df"])
+    with st.expander("Indicadores, análises e PDF",expanded=True):
+        selected_kpis=widget("multiselect","Indicadores desta página",c["key"]+"kpis",options=[k for k in kpi_options if k in values],default=[])
+        selected=widget("multiselect","Análises desta página",c["key"]+"analyses",options=chart_options,default=[],disabled=not selected_kpis)
+        left,right=st.columns(2)
+        if left.button("Selecionar todas as análises",key=c["key"]+"all",disabled=not selected_kpis):
+            st.session_state[c["key"]+"analyses_saved"]=list(chart_options)
+            st.rerun()
+        if right.button("Limpar análises",key=c["key"]+"none"):
+            st.session_state[c["key"]+"analyses_saved"]=[]
+            st.rerun()
+        top=widget("number_input","Top N padrão global","dash_global_top",min_value=1,max_value=100,value=10)
+        export_slot=st.container()
+    c.update(values=values,kpis=selected_kpis,selected=selected if selected_kpis else [],top=top,export_slot=export_slot)
+    if selected_kpis:
+        st.subheader("Indicadores do recorte")
+        render_kpi_cards(selected_kpis,values)
+    else:
+        st.info("Selecione indicadores para habilitar as análises desta página.")
+    if any("garantia" in name.lower() for name in selected_kpis):
+        st.warning("Garantia representa a situação atual da data limite. A cobertura histórica da chamada ainda não foi definida.")
+    return c
 
-    if page_id == "maquinas":
-        st.caption(
-            "Comparação Máquina A × Máquina B: "
-            "prevista para a próxima entrega. "
-            "Esta página já oferece rankings por equipamento."
-        )
 
-    signature_text = (
-        repr(spec)
-        + page_id
-        + repr(df.index.tolist())
-    )
+def chart_key(c,name):
+    return c["key"]+hashlib.sha1(name.encode()).hexdigest()[:10]
 
-    signature = hashlib.sha1(
-        signature_text.encode("utf-8")
-    ).hexdigest()
 
-    render_detail(
-        df,
-        page_id,
-        signature,
-    )
+def evolution(c,name="Evolução no período"):
+    key=chart_key(c,name)
+    left,right=st.columns(2)
+    with left:
+        gran=widget("selectbox","Agrupamento",key+"gran",options=["Diária","Semanal","Mensal"])
+    with right:
+        visual=widget("selectbox","Visual",key+"visual",options=["Barras","Linha","Barras + linha acumulada"])
+    fig=render_evolution_chart(c["df"],gran,visual,c["spec"]["period"])
+    registry(c,name,fig,{"Total de tarefas","Preventivas","Corretivas","% Preventivas","% Corretivas"})
+
+
+def ranking(c,column,title,associated,kind=None):
+    source=c["df"]
+    if kind: source=source.loc[source["Tipo"].eq(kind)]
+    if column not in source or source.empty:
+        st.info("Não há registros para "+title.lower()+".")
+        return
+    if column in {"Problema","Peça"}:
+        valid=occurrence_frame(source,column)
+    else:
+        valid=source.loc[source[column].fillna("").astype(str).str.strip().ne("")]
+    if valid.empty:
+        st.info("Não há ocorrências válidas para "+title.lower()+".")
+        return
+    key=chart_key(c,title)
+    st.markdown("### "+title)
+    with st.expander("Ajustes — "+title):
+        override=widget("checkbox","Definir Top N individual",key+"override",value=False)
+        n=widget("number_input","Top N individual",key+"n",min_value=1,max_value=100,value=10) if override else c["top"]
+        pair=widget("checkbox","Mostrar distribuição ao lado",key+"pair",value=False)
+        others=widget("checkbox","Agrupar restante em Outras",key+"others",value=True)
+    fig=render_horizontal_ranking(source,column,title,n)
+    if pair:
+        left,right=st.columns([1.35,1])
+        with left: registry(c,title,fig,associated)
+        with right: registry(c,title+" — distribuição",render_donut_chart(source,column,"Distribuição no recorte",n,others),associated)
+    else: registry(c,title,fig,associated)
+
+
+def participation(c):
+    key=c["key"]+"universe"
+    st.markdown("### Recorte × universo")
+    mode=widget("selectbox","Universo de comparação",key,options=["Todas as tarefas no período","Mesmo tipo no período","Personalizado"])
+    spec={"period":c["spec"]["period"],"Tipo":"Todas"}
+    if mode=="Mesmo tipo no período":
+        types=c["df"]["Tipo"].unique()
+        spec["Tipo"]=types[0] if len(types)==1 else c["spec"]["Tipo"]
+    elif mode=="Personalizado":
+        candidates=[col for col in ["Tipo"]+list(COLUMNS) if c["spec"].get(col) and c["spec"].get(col)!="Todas"]
+        keep=widget("multiselect","Manter filtros no universo",key+"keep",options=candidates,default=[])
+        for col in keep: spec[col]=c["spec"][col]
+    universe=apply_filters(c["raw"],spec)
+    st.caption(f"{len(c['df'])} tarefas no recorte / {len(universe)} no universo • mesmo período")
+    registry(c,"Participação do recorte no universo",render_cut_donut(universe,c["df"]),{"Total de tarefas"})
+
+
+def composition(c,title):
+    registry(c,title,render_donut_chart(c["df"],"Tipo",title,10,True),{"Total de tarefas","Preventivas","Corretivas","% Preventivas","% Corretivas"})
+
+
+def norm_header(value):
+    text=unicodedata.normalize("NFKD",str(value).strip().lower())
+    return " ".join("".join(ch for ch in text if not unicodedata.combining(ch)).split())
+
+
+def detail_columns(columns):
+    markers={"codigo do patrimonio","codigo de patrimonio","codigo patrimonio","cod. patrimonio","cod patrimonio"}
+    cutoff=next((i for i,col in enumerate(columns) if norm_header(col) in markers),None)
+    if cutoff is not None:
+        shown=[col for col in columns[:cutoff] if col not in {"Rótulo da máquina","Seleção da máquina"}]
+    else:
+        preferred=["Data da tarefa","Nome da máquina","Máquina","Tipo","Técnico","Cliente","Cidade","Região","Estado","Problema","Tarefa","Peça","Observações"]
+        shown=[col for col in preferred if col in columns]
+    if "Garantia" in columns and "Garantia" not in shown: shown.append("Garantia")
+    return shown,cutoff is not None
+
+
+def details(c):
+    with st.expander("Detalhamento dos registros",expanded=False):
+        data=c["df"]
+        shown,found=detail_columns(list(data.columns))
+        if not found: st.caption("Cabeçalho patrimonial não localizado; exibindo somente as colunas essenciais.")
+        prefix=c["key"]+"detail"
+        size=st.selectbox("Registros por página",[15,25,50,100],key=prefix+"size")
+        signature=hashlib.sha1((repr(c["spec"])+repr(data.index.tolist())+str(size)).encode()).hexdigest()
+        pages=max(1,math.ceil(len(data)/size))
+        if st.session_state.get(prefix+"signature")!=signature:
+            st.session_state[prefix+"page"]=1
+            st.session_state[prefix+"signature"]=signature
+        if not 1<=st.session_state.get(prefix+"page",1)<=pages: st.session_state[prefix+"page"]=1
+        page=int(st.number_input("Página",min_value=1,max_value=pages,step=1,key=prefix+"page"))
+        ordered=data.sort_values("Data da tarefa",ascending=False)
+        st.caption(f"{len(data)} registros • página {page} de {pages}")
+        st.dataframe(ordered.iloc[(page-1)*size:page*size][shown],hide_index=True,use_container_width=True)
+
+
+def finish(c):
+    with c["export_slot"]:
+        st.markdown("#### Exportação PDF")
+        key=c["key"]+"pdf"
+        names=widget("multiselect","Gráficos para o PDF",key+"charts",options=list(c["figures"]),default=[])
+        allowed=set(c["values"]) if not names else set().union(*(c["associations"][name] for name in names))
+        selected=widget("multiselect","Indicadores para o PDF",key+"kpis",options=[k for k in c["values"] if k in allowed],default=[])
+        st.caption("Sem gráficos, escolha livre de indicadores. Com gráficos, somente os associados. Na comparação, os cartões PDF são os do recorte A + B; os gráficos identificam A e B.")
+        count=widget("selectbox","Gráficos por página",key+"count",options=[1,2,3,4])
+        if st.button("Gerar PDF",key=key+"generate",disabled=not(names or selected)):
+            try:
+                pdf=generate_pdf_report(c["values"],selected,{n:c["figures"][n] for n in names},count)
+                st.download_button("Baixar PDF",pdf,"painel_"+c["id"]+".pdf","application/pdf",key=key+"download")
+            except Exception as error:
+                st.error("Não foi possível gerar o PDF. Confira Kaleido e Chromium no servidor.")
+                st.code(str(error))
+    details(c)
+
+
+def render_monitoramento():
+    c=context("monitoramento","Monitoramento","Como está a operação? Visão consolidada de volume, composição e concentração de corretivas.")
+    if c is None: return
+    configuration(c,["Total de tarefas","Preventivas","Corretivas","% Preventivas","% Corretivas","Máquinas atendidas","Técnicos envolvidos"],
+                  ["Evolução da operação","Composição das manutenções","Equipamentos com mais corretivas","Recorte × universo"])
+    if "Evolução da operação" in c["selected"]:
+        st.subheader("Ritmo da operação")
+        evolution(c,"Evolução da operação")
+    left,right=st.columns([1,1.4])
+    with left:
+        if "Composição das manutenções" in c["selected"]: composition(c,"Preventivas × corretivas")
+    with right:
+        if "Equipamentos com mais corretivas" in c["selected"]: ranking(c,"Rótulo da máquina","Equipamentos com mais corretivas",{"Corretivas","Máquinas atendidas"},"Corretiva")
+    if "Recorte × universo" in c["selected"]: participation(c)
+    finish(c)
+
+
+def render_analise_tarefas():
+    c=context("analise_tarefas","Análise de tarefas","O que foi feito? Serviços executados, responsáveis e volume ao longo do período.")
+    if c is None: return
+    configuration(c,["Total de tarefas","Preventivas","Corretivas","% Preventivas","% Corretivas","Técnicos envolvidos","Máquinas atendidas"],
+                  ["Serviços executados","Ritmo dos atendimentos","Distribuição por responsável","Distribuição por equipamento"])
+    if "Serviços executados" in c["selected"]: ranking(c,"Tarefa","Serviços executados",{"Total de tarefas","Preventivas","Corretivas"})
+    if "Ritmo dos atendimentos" in c["selected"]: evolution(c,"Ritmo dos atendimentos")
+    left,right=st.columns(2)
+    with left:
+        if "Distribuição por responsável" in c["selected"]: ranking(c,"Técnico","Tarefas por responsável",{"Total de tarefas","Técnicos envolvidos"})
+    with right:
+        if "Distribuição por equipamento" in c["selected"]: ranking(c,"Rótulo da máquina","Tarefas por equipamento",{"Total de tarefas","Máquinas atendidas"})
+    finish(c)
+
+
+def render_corretivas():
+    c=context("corretivas","Corretivas","Quais falhas ocorreram e como foram tratadas? Apenas tarefas corretivas entram nesta página.",True)
+    if c is None: return
+    configuration(c,["Corretivas","Máquinas atendidas","Técnicos envolvidos","Problema mais frequente","Peça mais trocada","Corretivas em garantia","Corretivas fora da garantia"],
+                  ["Falhas relatadas","Peças utilizadas","Serviços corretivos","Equipamentos envolvidos","Evolução das corretivas"])
+    left,right=st.columns(2)
+    with left:
+        if "Falhas relatadas" in c["selected"]: ranking(c,"Problema","Falhas relatadas",{"Corretivas","Problema mais frequente"})
+    with right:
+        if "Peças utilizadas" in c["selected"]: ranking(c,"Peça","Peças utilizadas",{"Corretivas","Peça mais trocada"})
+    if "Serviços corretivos" in c["selected"]: ranking(c,"Tarefa","Serviços corretivos",{"Corretivas"})
+    if "Equipamentos envolvidos" in c["selected"]: ranking(c,"Rótulo da máquina","Equipamentos envolvidos em corretivas",{"Corretivas","Máquinas atendidas"})
+    if "Evolução das corretivas" in c["selected"]: evolution(c,"Evolução das corretivas")
+    missing=c["df"]["Problema"].fillna("").astype(str).str.strip().isin(["","Não informado","Nao informado"])
+    if missing.any(): st.warning(f"{int(missing.sum())} corretiva(s) sem problema válido preenchido. Não entram no ranking de falhas.")
+    finish(c)
+
+
+def render_clientes_regioes():
+    c=context("clientes_regioes","Clientes e regiões","Onde os atendimentos se concentram? Cliente, localização e composição das manutenções.")
+    if c is None: return
+    available_columns=[col for col in ["Cliente","Estado","Região","Cidade"] if c["df"][col].fillna("").astype(str).str.strip().ne("").any()]
+    if not available_columns:
+        st.info("A fonte não possui cliente ou localização preenchidos neste recorte. Não serão criadas categorias artificiais.")
+    with st.expander("Refinar cliente e localização nesta página",expanded=False):
+        for col in available_columns:
+            options=sorted(c["df"][col].dropna().loc[lambda s:s.astype(str).str.strip().ne("")].unique())
+            chosen=widget("multiselect",col+" nesta página",c["key"]+"local_"+col,options=options,default=[])
+            if chosen: c["df"]=c["df"].loc[c["df"][col].isin(chosen)]
+    if c["df"].empty:
+        st.info("Nenhum atendimento corresponde ao refinamento local.")
+        return
+    dims=[col for col in available_columns if c["df"][col].fillna("").astype(str).str.strip().ne("").any()]
+    options=["Distribuição por "+col.lower() for col in dims]+["Composição local","Participação no universo"]
+    configuration(c,["Total de tarefas","Máquinas atendidas","Preventivas","Corretivas","% Corretivas"],options)
+    for i in range(0,len(dims),2):
+        cols=st.columns(2)
+        for slot,col in zip(cols,dims[i:i+2]):
+            with slot:
+                if "Distribuição por "+col.lower() in c["selected"]: ranking(c,col,"Atendimentos por "+col.lower(),{"Total de tarefas","Máquinas atendidas"})
+    if "Composição local" in c["selected"]: composition(c,"Composição das manutenções no recorte local")
+    if "Participação no universo" in c["selected"]: participation(c)
+    finish(c)
+
+
+def render_maquinas():
+    c=context("maquinas","Máquinas","Qual equipamento exige atenção? Explore uma máquina ou compare duas sob os mesmos filtros de contexto.")
+    if c is None: return
+    base=comparison_base(c["raw"],c["spec"])
+    if base.empty:
+        st.info("Nenhuma máquina com tarefas neste contexto.")
+        return
+    st.caption("Seleções abaixo substituem apenas o filtro de máquina da lateral nesta página. Período, tipo, técnico, cliente e localização continuam aplicados.")
+    labels=dict(zip(c["raw"]["Máquina"],c["raw"]["Seleção da máquina"]))
+    codes=sorted(base["Máquina"].unique())
+    mode=widget("radio","Modo de análise",c["key"]+"mode",options=["Uma máquina","Comparar A × B"],horizontal=True)
+    choices=[None]+codes
+    label_func=lambda code: "Selecione uma máquina" if code is None else labels.get(code,code)
+    code_a=widget("selectbox","Máquina A" if mode=="Comparar A × B" else "Equipamento",c["key"]+"machine_a",options=choices,format_func=label_func)
+    if code_a is None:
+        st.info("Escolha o equipamento para iniciar a análise.")
+        return
+    a=base.loc[base["Máquina"].eq(code_a)].copy()
+    if mode=="Uma máquina":
+        c["df"]=a
+        st.subheader(labels[code_a])
+        configuration(c,["Total de tarefas","Preventivas","Corretivas","% Corretivas","Problema mais frequente","Peça mais trocada"],
+                      ["Histórico do equipamento","Composição do equipamento","Problemas do equipamento","Peças do equipamento","Serviços no equipamento"])
+        if "Histórico do equipamento" in c["selected"]: evolution(c,"Histórico do equipamento")
+        if "Composição do equipamento" in c["selected"]: composition(c,"Composição do equipamento")
+        left,right=st.columns(2)
+        with left:
+            if "Problemas do equipamento" in c["selected"]: ranking(c,"Problema","Problemas do equipamento",{"Corretivas","Problema mais frequente"})
+        with right:
+            if "Peças do equipamento" in c["selected"]: ranking(c,"Peça","Peças do equipamento",{"Corretivas","Peça mais trocada"})
+        if "Serviços no equipamento" in c["selected"]: ranking(c,"Tarefa","Serviços no equipamento",{"Total de tarefas"})
+    else:
+        code_b=widget("selectbox","Máquina B",c["key"]+"machine_b",options=[None]+[v for v in codes if v!=code_a],format_func=label_func)
+        if code_b is None:
+            st.info("Escolha uma segunda máquina diferente da primeira.")
+            return
+        a,b=split_machines(base,code_a,code_b)
+        c["df"]=base.loc[base["Máquina"].isin([code_a,code_b])].copy()
+        la,lb=labels[code_a],labels[code_b]
+        configuration(c,["Total de tarefas","Preventivas","Corretivas","% Corretivas","Máquinas atendidas","Problema mais frequente","Peça mais trocada"],
+                      ["Volume A × B","Evolução A × B","Participação A × B","Problemas A × B","Peças A × B"])
+        if c["kpis"]:
+            st.subheader("Indicadores individuais — mesmos filtros de contexto")
+            left,right=st.columns(2)
+            for slot,data,label in [(left,a,la),(right,b,lb)]:
+                with slot:
+                    st.markdown("#### "+label)
+                    stats=calculate_kpis(data)
+                    for name in c["kpis"]: st.metric(name,stats[name])
+        associated={"Total de tarefas","Preventivas","Corretivas","% Corretivas","Máquinas atendidas"}
+        if "Volume A × B" in c["selected"]: registry(c,"Volume A × B",comparison_bars(a,b,la,lb),associated)
+        if "Evolução A × B" in c["selected"]:
+            gran=widget("selectbox","Agrupamento da comparação",c["key"]+"compare_gran",options=["Diária","Semanal","Mensal"])
+            registry(c,"Evolução A × B",comparison_evolution(a,b,la,lb,c["spec"]["period"],gran),associated)
+        if "Participação A × B" in c["selected"]: registry(c,"Participação A × B",comparison_share(a,b,la,lb),associated)
+        for name,column in [("Problemas A × B","Problema"),("Peças A × B","Peça")]:
+            if name in c["selected"]:
+                key=chart_key(c,name)
+                with st.expander("Top N — "+name):
+                    own=widget("checkbox","Usar Top N individual",key+"own",value=False)
+                    n=widget("number_input","Top N individual",key+"n",min_value=1,max_value=100,value=10) if own else c["top"]
+                registry(c,name,comparison_occurrences(a,b,column,la,lb,n),{"Corretivas","Problema mais frequente" if column=="Problema" else "Peça mais trocada"})
+    finish(c)
