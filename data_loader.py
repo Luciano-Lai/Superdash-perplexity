@@ -134,7 +134,7 @@ def _load_sheet(url, required_keywords):
     return _extract_table(df_raw, header_index)
 
 
-def _normalize_column_names(df):
+def _normalize_master_columns(df):
     rename_map = {}
 
     for column in df.columns:
@@ -147,22 +147,40 @@ def _normalize_column_names(df):
             rename_map[column] = "Técnico"
 
         elif "manutencao" in column_normalized:
-            rename_map[column] = "Manutenção"
+            rename_map[column] = "Tipo"
 
         elif column_normalized == "data":
-            rename_map[column] = "Data"
+            rename_map[column] = "Data da tarefa"
 
         elif "data garantia" in column_normalized:
             rename_map[column] = "Data Garantia"
 
         elif "problema" in column_normalized:
-            rename_map[column] = "Problemas Relatados"
+            rename_map[column] = "Problema"
 
         elif "peca" in column_normalized:
-            rename_map[column] = "Peças Trocadas"
+            rename_map[column] = "Peça"
 
-        elif "tarefa" in column_normalized and "data" not in column_normalized:
+        elif "tarefa" in column_normalized:
             rename_map[column] = "Tarefa"
+
+    return df.rename(columns=rename_map)
+
+
+def _normalize_dados_columns(df):
+    rename_map = {}
+
+    for column in df.columns:
+        column_normalized = _normalize_text(column)
+
+        if "codigo ar verificado" in column_normalized:
+            rename_map[column] = "Código Ar Verificado"
+
+        elif "equipamento" in column_normalized:
+            rename_map[column] = "Equipamento"
+
+        elif column_normalized == "tipo":
+            rename_map[column] = "Tipo Equipamento"
 
     return df.rename(columns=rename_map)
 
@@ -192,7 +210,7 @@ def _clean_text(value):
         pass
 
     return str(value).strip()
-    
+
 
 @st.cache_data(ttl=300)
 def load_and_normalize_data():
@@ -220,8 +238,8 @@ def load_and_normalize_data():
         )
         df_dados = pd.DataFrame()
 
-    df_master = _normalize_column_names(df_master)
-    df_dados = _normalize_column_names(df_dados)
+    df_master = _normalize_master_columns(df_master)
+    df_dados = _normalize_dados_columns(df_dados)
 
     machine_code = "Código Ar Verificado"
 
@@ -242,37 +260,29 @@ def load_and_normalize_data():
     df = df.loc[:, ~df.columns.duplicated()]
     df = df.reset_index(drop=True)
 
-    df = df.rename(
-        columns={
-            "Data": "Data da tarefa",
-            "Manutenção": "Tipo",
-            machine_code: "Máquina",
-        }
-    )
+    if "Tipo" not in df.columns:
+        df["Tipo"] = pd.NA
 
-    if "Máquina" in df.columns:
-        df = df[
-            df["Máquina"].notna()
-            & (df["Máquina"].astype(str).str.strip() != "")
-        ]
-
-    if "Data da tarefa" in df.columns:
-        df["Data da tarefa"] = pd.to_datetime(
-            df["Data da tarefa"],
-            errors="coerce",
-            dayfirst=True,
-        )
-    else:
+    if "Data da tarefa" not in df.columns:
         df["Data da tarefa"] = pd.NaT
 
-    if "Data Garantia" in df.columns:
-        df["Data Garantia"] = pd.to_datetime(
-            df["Data Garantia"],
-            errors="coerce",
-            dayfirst=True,
-        )
-    else:
+    if "Data Garantia" not in df.columns:
         df["Data Garantia"] = pd.NaT
+
+    if "Máquina" not in df.columns:
+        df["Máquina"] = df[machine_code]
+
+    df["Data da tarefa"] = pd.to_datetime(
+        df["Data da tarefa"],
+        errors="coerce",
+        dayfirst=True,
+    )
+
+    df["Data Garantia"] = pd.to_datetime(
+        df["Data Garantia"],
+        errors="coerce",
+        dayfirst=True,
+    )
 
     df["Garantia"] = df.apply(
         _calculate_guarantee_status,
@@ -296,22 +306,13 @@ def load_and_normalize_data():
         if column not in df.columns:
             df[column] = pd.NA
 
-    if "Problemas Relatados" not in df.columns:
-        df["Problemas Relatados"] = pd.NA
+    if "Problema" not in df.columns:
+        df["Problema"] = pd.NA
 
-    df["Problema"] = df["Problemas Relatados"]
-
-    if "Peças Trocadas" in df.columns:
-        df["Peça"] = df["Peças Trocadas"]
-    else:
+    if "Peça" not in df.columns:
         df["Peça"] = pd.NA
 
-    df["Tipo"] = (
-        df["Tipo"]
-        .apply(_clean_text)
-        .str.title()
-    )
-
+    df["Tipo"] = df["Tipo"].apply(_clean_text).str.title()
     df["Máquina"] = df["Máquina"].apply(_clean_text)
     df["Técnico"] = df["Técnico"].apply(_clean_text)
 
