@@ -1,5 +1,4 @@
 import unicodedata
-from datetime import datetime
 
 import pandas as pd
 import streamlit as st
@@ -32,14 +31,10 @@ DADOS_HEADER_KEYWORDS = [
 def _normalize_text(value):
     text = str(value).strip().lower()
 
-    text = unicodedata.normalize(
-        "NFKD",
-        text,
-    ).encode(
-        "ascii",
-        "ignore",
-    ).decode(
-        "ascii",
+    text = (
+        unicodedata.normalize("NFKD", text)
+        .encode("ascii", "ignore")
+        .decode("ascii")
     )
 
     return text
@@ -83,10 +78,7 @@ def _find_header_row(df_raw, required_keywords):
         matches = sum(
             1
             for keyword in normalized_keywords
-            if any(
-                keyword in value
-                for value in row_values
-            )
+            if any(keyword in value for value in row_values)
         )
 
         if matches >= 2:
@@ -139,10 +131,7 @@ def _load_sheet(url, required_keywords):
             "Não foi possível localizar a linha de cabeçalho da planilha."
         )
 
-    return _extract_table(
-        df_raw,
-        header_index,
-    )
+    return _extract_table(df_raw, header_index)
 
 
 def _normalize_column_names(df):
@@ -190,7 +179,14 @@ def _calculate_guarantee_status(row):
         return "Dentro"
 
     return "Fora"
-    
+
+
+def _clean_text(value):
+    if pd.isna(value):
+        return ""
+
+    return str(value).strip()
+
 
 @st.cache_data(ttl=300)
 def load_and_normalize_data():
@@ -251,10 +247,7 @@ def load_and_normalize_data():
     if "Máquina" in df.columns:
         df = df[
             df["Máquina"].notna()
-            & (
-                df["Máquina"].astype(str).str.strip()
-                != ""
-            )
+            & (df["Máquina"].astype(str).str.strip() != "")
         ]
 
     if "Data da tarefa" in df.columns:
@@ -307,30 +300,23 @@ def load_and_normalize_data():
     else:
         df["Peça"] = pd.NA
 
-    def _clean_text(value):
-    if pd.isna(value):
-        return ""
+    df["Tipo"] = (
+        df["Tipo"]
+        .apply(_clean_text)
+        .str.title()
+    )
 
-    return str(value).strip()
+    df["Máquina"] = df["Máquina"].apply(_clean_text)
+    df["Técnico"] = df["Técnico"].apply(_clean_text)
 
+    for column in [
+        "Cliente",
+        "Cidade",
+        "Região",
+        "Estado",
+    ]:
+        df[column] = df[column].apply(_clean_text)
 
-df["Tipo"] = (
-    df["Tipo"]
-    .apply(_clean_text)
-    .str.title()
-)
-
-df["Máquina"] = df["Máquina"].apply(_clean_text)
-df["Técnico"] = df["Técnico"].apply(_clean_text)
-
-for column in [
-    "Cliente",
-    "Cidade",
-    "Região",
-    "Estado",
-]:
-    df[column] = df[column].apply(_clean_text)
-    
     df["Problema"] = df["Problema"].fillna("Não informado")
     df["Peça"] = df["Peça"].fillna("Nenhuma")
 
