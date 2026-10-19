@@ -182,11 +182,17 @@ def _calculate_guarantee_status(row):
 
 
 def _clean_text(value):
-    if pd.isna(value):
+    if value is None:
         return ""
 
-    return str(value).strip()
+    try:
+        if pd.isna(value):
+            return ""
+    except (ValueError, TypeError):
+        pass
 
+    return str(value).strip()
+    
 
 @st.cache_data(ttl=300)
 def load_and_normalize_data():
