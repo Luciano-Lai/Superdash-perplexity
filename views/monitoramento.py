@@ -1,3 +1,3 @@
-from ui import render_page
+from ui import render_monitoramento
 
-render_page("monitoramento")
+render_monitoramento()
