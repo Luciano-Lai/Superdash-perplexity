@@ -1,8 +1,27 @@
-import streamlit as st
-import pandas as pd
 import datetime
 
+import pandas as pd
+import streamlit as st
+
 DATE_COLUMN = "Data da tarefa"
+
+
+def _normalize_text(value):
+    import unicodedata
+
+    text = str(value).strip().lower()
+
+    text = unicodedata.normalize(
+        "NFKD",
+        text,
+    ).encode(
+        "ascii",
+        "ignore",
+    ).decode(
+        "ascii",
+    )
+
+    return text
 
 
 def _get_unique_options(df, column):
@@ -35,6 +54,17 @@ def _apply_multiselect_filter(df, column, selected_values):
 
 
 def render_sidebar_filters(df):
+    if df.empty or DATE_COLUMN not in df.columns:
+        st.sidebar.info(
+            "Não foi possível carregar os dados da planilha."
+        )
+
+        return (
+            pd.DataFrame(),
+            False,
+            False,
+        )
+
     st.sidebar.markdown("### Filtros")
     st.sidebar.caption(
         "Selecione o período e pelo menos um filtro adicional."
@@ -209,4 +239,8 @@ def render_sidebar_filters(df):
         selected_states,
     )
 
-    return df_filtered, is_date_valid, has_additional_filter
+    return (
+        df_filtered,
+        is_date_valid,
+        has_additional_filter,
+    )
