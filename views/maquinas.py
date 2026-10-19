@@ -1,3 +1,3 @@
-from ui import render_page
+from ui import render_maquinas
 
-render_page("maquinas")
+render_maquinas()
