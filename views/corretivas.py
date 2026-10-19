@@ -1,3 +1,3 @@
-from ui import render_page
+from ui import render_corretivas
 
-render_page("corretivas")
+render_corretivas()
