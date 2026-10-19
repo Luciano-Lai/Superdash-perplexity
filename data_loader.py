@@ -1,6 +1,8 @@
+import unicodedata
+from datetime import datetime
+
 import pandas as pd
 import streamlit as st
-import datetime
 
 URL_ABA_MASTER = (
     "https://docs.google.com/spreadsheets/d/e/"
@@ -9,25 +11,38 @@ URL_ABA_MASTER = (
 )
 
 URL_ABA_DADOS = (
-    "https://docs.google.com/spreadsheets/d/e/2PACX-1vQhMjvBLcrdrgNIqCsHZOd3ZUb63abkzKPYYfOU7qFb45ljZmO2_UmerQjWWWxNvR4RfW_XElnCgHXf/"
+    "https://docs.google.com/spreadsheets/d/e/"
+    "2PACX-1vQhMjvBLcrdrgNIqCsHZOd3ZUb63abkzKPYYfOU7qFb45ljZmO2_UmerQjWWWxNvR4RfW_XElnCgHXf/"
     "pub?gid=152468513&single=true&output=csv"
 )
 
 MASTER_HEADER_KEYWORDS = [
     "código ar verificado",
-    "codigo ar verificado",
     "técnico",
-    "tecnico",
     "manutenção",
-    "manutencao",
 ]
 
 DADOS_HEADER_KEYWORDS = [
     "código ar verificado",
-    "codigo ar verificado",
     "equipamento",
     "tipo",
 ]
+
+
+def _normalize_text(value):
+    text = str(value).strip().lower()
+
+    text = unicodedata.normalize(
+        "NFKD",
+        text,
+    ).encode(
+        "ascii",
+        "ignore",
+    ).decode(
+        "ascii",
+    )
+
+    return text
 
 
 def _read_csv_with_fallback(url):
@@ -48,25 +63,33 @@ def _read_csv_with_fallback(url):
             continue
 
     raise RuntimeError(
-        f"Não foi possível ler a planilha. Erro: {last_error}"
+        f"Não foi possível ler a planilha. Detalhe: {last_error}"
     )
 
 
 def _find_header_row(df_raw, required_keywords):
+    normalized_keywords = [
+        _normalize_text(keyword)
+        for keyword in required_keywords
+    ]
+
     for index, row in df_raw.iterrows():
-        values = [
-            str(value).strip().lower()
+        row_values = [
+            _normalize_text(value)
             for value in row.values
             if pd.notna(value)
         ]
 
         matches = sum(
             1
-            for keyword in required_keywords
-            if any(keyword in value for value in values)
+            for keyword in normalized_keywords
+            if any(
+                keyword in value
+                for value in row_values
+            )
         )
 
-        if matches >= len(required_keywords) - 1:
+        if matches >= 2:
             return index
 
     return None
@@ -83,8 +106,19 @@ def _extract_table(df_raw, header_index):
     df = df_raw.iloc[header_index + 1:].copy()
     df.columns = columns
 
-    df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
-    df = df.loc[:, ~df.columns.str.lower().isin(["none", "nan", ""])]
+    df = df.loc[
+        :,
+        ~df.columns.str.startswith("Unnamed"),
+    ]
+
+    df = df.loc[
+        :,
+        ~df.columns.str.lower().isin([
+            "none",
+            "nan",
+            "",
+        ]),
+    ]
 
     df = df.dropna(how="all")
     df = df.reset_index(drop=True)
@@ -105,62 +139,43 @@ def _load_sheet(url, required_keywords):
             "Não foi possível localizar a linha de cabeçalho da planilha."
         )
 
-    return _extract_table(df_raw, header_index)
+    return _extract_table(
+        df_raw,
+        header_index,
+    )
 
 
 def _normalize_column_names(df):
     rename_map = {}
 
     for column in df.columns:
-        column_clean = str(column).strip().lower()
+        column_normalized = _normalize_text(column)
 
-        if "código ar" in column_clean or "codigo ar" in column_clean:
+        if "codigo ar verificado" in column_normalized:
             rename_map[column] = "Código Ar Verificado"
 
-        elif "técnico" in column_clean or "tecnico" in column_clean:
+        elif "tecnico" in column_normalized:
             rename_map[column] = "Técnico"
 
-        elif "manutenção" in column_clean or "manutencao" in column_clean:
+        elif "manutencao" in column_normalized:
             rename_map[column] = "Manutenção"
 
-        elif column_clean == "data":
+        elif column_normalized == "data":
             rename_map[column] = "Data"
 
-        elif "data garantia" in column_clean:
+        elif "data garantia" in column_normalized:
             rename_map[column] = "Data Garantia"
 
-        elif "problema" in column_clean:
+        elif "problema" in column_normalized:
             rename_map[column] = "Problemas Relatados"
 
-        elif "peça" in column_clean or "peca" in column_clean:
+        elif "peca" in column_normalized:
             rename_map[column] = "Peças Trocadas"
 
-        elif "tarefa" in column_clean and "data" not in column_clean:
+        elif "tarefa" in column_normalized and "data" not in column_normalized:
             rename_map[column] = "Tarefa"
 
     return df.rename(columns=rename_map)
-
-
-def _split_multiple_values(value):
-    if pd.isna(value):
-        return []
-
-    text = str(value).strip()
-
-    if not text:
-        return []
-
-    parts = (
-        text
-        .replace("\n", ";")
-        .split(";")
-    )
-
-    return [
-        item.strip()
-        for item in parts
-        if item.strip()
-    ]
 
 
 def _calculate_guarantee_status(row):
@@ -206,9 +221,6 @@ def load_and_normalize_data():
     df_master = _normalize_column_names(df_master)
     df_dados = _normalize_column_names(df_dados)
 
-    # ------------------------------------------------------------------
-    # Junção entre tarefas e máquinas
-    # ------------------------------------------------------------------
     machine_code = "Código Ar Verificado"
 
     if (
@@ -228,9 +240,6 @@ def load_and_normalize_data():
     df = df.loc[:, ~df.columns.duplicated()]
     df = df.reset_index(drop=True)
 
-    # ------------------------------------------------------------------
-    # Padronização dos campos principais
-    # ------------------------------------------------------------------
     df = df.rename(
         columns={
             "Data": "Data da tarefa",
@@ -239,17 +248,15 @@ def load_and_normalize_data():
         }
     )
 
-    # Remove registros sem máquina
     if "Máquina" in df.columns:
         df = df[
-            df["Máquina"]
-            .notna()
-            & (df["Máquina"].astype(str).str.strip() != "")
+            df["Máquina"].notna()
+            & (
+                df["Máquina"].astype(str).str.strip()
+                != ""
+            )
         ]
 
-    # ------------------------------------------------------------------
-    # Datas
-    # ------------------------------------------------------------------
     if "Data da tarefa" in df.columns:
         df["Data da tarefa"] = pd.to_datetime(
             df["Data da tarefa"],
@@ -268,17 +275,11 @@ def load_and_normalize_data():
     else:
         df["Data Garantia"] = pd.NaT
 
-    # ------------------------------------------------------------------
-    # Garantia
-    # ------------------------------------------------------------------
     df["Garantia"] = df.apply(
         _calculate_guarantee_status,
         axis=1,
     )
 
-    # ------------------------------------------------------------------
-    # Campos complementares
-    # ------------------------------------------------------------------
     optional_columns = [
         "Equipamento",
         "Tipo Equipamento",
@@ -299,16 +300,13 @@ def load_and_normalize_data():
     if "Problemas Relatados" not in df.columns:
         df["Problemas Relatados"] = pd.NA
 
+    df["Problema"] = df["Problemas Relatados"]
+
     if "Peças Trocadas" in df.columns:
-        df["Problema"] = df["Problemas Relatados"]
         df["Peça"] = df["Peças Trocadas"]
     else:
-        df["Problema"] = df["Problemas Relatados"]
         df["Peça"] = pd.NA
 
-    # ------------------------------------------------------------------
-    # Normalização final
-    # ------------------------------------------------------------------
     df["Tipo"] = (
         df["Tipo"]
         .astype(str)
