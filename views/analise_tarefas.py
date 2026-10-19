@@ -1,3 +1,3 @@
-from ui import render_page
+from ui import render_analise_tarefas
 
-render_page("analise_tarefas")
+render_analise_tarefas()
