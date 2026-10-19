@@ -1,268 +1,98 @@
+import math
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import pandas as pd
+from kpis import occurrence_frame
 
-COLOR_PREVENTIVA = "#2E86AB"
-COLOR_CORRETIVA = "#E76F51"
-COLOR_TOTAL = "#1F4E79"
-COLOR_NEUTRO = "#9CA3AF"
-COLOR_DESTAQUE = "#1F4E79"
-
-BASE_LAYOUT = {
-    "paper_bgcolor": "rgba(0,0,0,0)",
-    "plot_bgcolor": "rgba(0,0,0,0)",
-    "font": {
-        "family": "Arial, sans-serif",
-        "size": 12,
-        "color": "#374151",
-    },
-    "margin": {"l": 20, "r": 20, "t": 30, "b": 40},
-    "showlegend": False,
-}
+BLUE = "#245A81"
+COLORS = {"Preventiva": "#31889A", "Corretiva": "#D58246"}
 
 
-def _clean_layout(fig, height=380):
-    fig.update_layout(**BASE_LAYOUT)
-    fig.update_layout(height=height)
-
-    fig.update_xaxes(
-        showgrid=False,
-        zeroline=False,
-        linecolor="#E5E7EB",
-        tickfont={"size": 11, "color": "#6B7280"},
-    )
-
-    fig.update_yaxes(
-        showgrid=True,
-        gridcolor="#F3F4F6",
-        zeroline=False,
-        tickfont={"size": 11, "color": "#6B7280"},
-    )
-
+def style(fig, title, height=400):
+    fig.update_layout(template="plotly_white", title=dict(text=title, font=dict(size=17)),
+                      height=height, paper_bgcolor="white", plot_bgcolor="white",
+                      font=dict(family="Arial", color="#172B4D", size=12),
+                      margin=dict(l=20, r=45, t=70, b=45),
+                      legend=dict(orientation="h", y=-0.22), separators=",.")
     return fig
 
 
-def render_evolution_chart(df, granularity="Diária", chart_type="Barras"):
-    df_evo = df.copy()
+def integer_axis(maximum):
+    maximum = max(1, int(maximum))
+    step = max(1, math.ceil(maximum / 6))
+    ceiling = math.ceil(maximum / step) * step
+    return dict(range=[0, ceiling], tick0=0, dtick=step, tickformat="d", zeroline=False)
 
-    if granularity == "Semanal":
-        df_evo["Período"] = df_evo["Data da tarefa"].dt.to_period("W").dt.start_time
-    elif granularity == "Mensal":
-        df_evo["Período"] = df_evo["Data da tarefa"].dt.to_period("M").dt.start_time
+
+def render_evolution_chart(df, granularity="Diária", chart_type="Barras", period=None):
+    data = df.loc[df["Data da tarefa"].notna()].copy()
+    freq = {"Diária": "D", "Semanal": "W-SUN", "Mensal": "M"}[granularity]
+    dates = data["Data da tarefa"].dt.to_period(freq)
+    start = pd.Timestamp(period[0]) if period else data["Data da tarefa"].min()
+    end = pd.Timestamp(period[1]) if period else data["Data da tarefa"].max()
+    periods = pd.period_range(start, end, freq=freq)
+    table = pd.crosstab(dates, data["Tipo"]).reindex(periods, fill_value=0)
+    totals = table.sum(axis=1)
+    x = periods.start_time
+    fig = go.Figure()
+    if chart_type == "Barras + linha acumulada":
+        accumulated = totals.cumsum()
+        fig.add_bar(x=x, y=totals, name="Tarefas no período", marker_color=BLUE)
+        fig.add_scatter(x=x, y=accumulated, name="Acumulado", mode="lines+markers",
+                        yaxis="y2", line=dict(color="#D58246", width=3))
+        fig.update_layout(yaxis=dict(title="Tarefas no período", **integer_axis(totals.max())),
+                          yaxis2=dict(title="Acumulado de tarefas", overlaying="y", side="right",
+                                      showgrid=False, **integer_axis(accumulated.max())))
     else:
-        df_evo["Período"] = df_evo["Data da tarefa"].dt.date
+        for kind in table.columns:
+            if chart_type == "Linha":
+                fig.add_scatter(x=x, y=table[kind], name=kind, mode="lines+markers", line=dict(color=COLORS.get(kind, BLUE)))
+            else:
+                fig.add_bar(x=x, y=table[kind], name=kind, marker_color=COLORS.get(kind, BLUE))
+        fig.update_layout(barmode="group", yaxis=dict(title="Tarefas", **integer_axis(table.max().max())))
+    fig.update_traces(hovertemplate="%{x|%d/%m/%Y}<br>%{y:.0f} tarefas<extra>%{fullData.name}</extra>")
+    fig.update_xaxes(title=None, tickformat="%d/%m/%Y")
+    return style(fig, "Evolução das manutenções", 420)
 
-    grouped = (
-        df_evo
-        .groupby(["Período", "Tipo"], dropna=False)
-        .size()
-        .reset_index(name="Quantidade")
-    )
 
-    color_map = {
-        "Preventiva": COLOR_PREVENTIVA,
-        "Corretiva": COLOR_CORRETIVA,
-    }
-
-    if chart_type == "Linha":
-        fig = px.line(
-            grouped,
-            x="Período",
-            y="Quantidade",
-            color="Tipo",
-            color_discrete_map=color_map,
-            markers=True,
-        )
-
-        fig.update_traces(
-            line={"width": 3},
-            marker={"size": 7},
-        )
-
-    elif chart_type == "Barras + linha acumulada":
-        totals = (
-            df_evo
-            .groupby("Período")
-            .size()
-            .reset_index(name="Total")
-            .sort_values("Período")
-        )
-        totals["Acumulado"] = totals["Total"].cumsum()
-
-        fig = go.Figure()
-
-        fig.add_trace(
-            go.Bar(
-                x=totals["Período"],
-                y=totals["Total"],
-                name="Tarefas no período",
-                marker_color=COLOR_TOTAL,
-                hovertemplate="%{x}<br>Tarefas: %{y}<extra></extra>",
-            )
-        )
-
-        fig.add_trace(
-            go.Scatter(
-                x=totals["Período"],
-                y=totals["Acumulado"],
-                name="Acumulado",
-                mode="lines+markers",
-                line={"color": COLOR_CORRETIVA, "width": 3},
-                marker={"size": 7},
-                yaxis="y2",
-                hovertemplate="%{x}<br>Acumulado: %{y}<extra></extra>",
-            )
-        )
-
-        fig.update_layout(
-            legend={
-                "orientation": "h",
-                "yanchor": "bottom",
-                "y": 1.02,
-                "xanchor": "left",
-                "x": 0,
-                "font": {"size": 11},
-            },
-            yaxis={"title": "Tarefas no período"},
-            yaxis2={
-                "title": "Acumulado",
-                "overlaying": "y",
-                "side": "right",
-                "showgrid": False,
-            },
-        )
-
-    else:
-        fig = px.bar(
-            grouped,
-            x="Período",
-            y="Quantidade",
-            color="Tipo",
-            barmode="group",
-            color_discrete_map=color_map,
-        )
-
-        fig.update_traces(
-            marker_line_width=0,
-            hovertemplate="%{x}<br>%{legendgroup}: %{y}<extra></extra>",
-        )
-
-    fig.update_layout(
-        legend={
-            "orientation": "h",
-            "yanchor": "bottom",
-            "y": 1.02,
-            "xanchor": "left",
-            "x": 0,
-            "font": {"size": 11},
-        }
-    )
-
-    return _clean_layout(fig, height=400)
+def category_counts(df, column):
+    if column in {"Problema", "Peça"}:
+        df = occurrence_frame(df, column)
+    values = df[column].fillna("").astype(str).str.strip()
+    return values.loc[values.ne("")].value_counts()
 
 
 def render_horizontal_ranking(df, column, title, top_n=10):
-    counts = (
-        df[column]
-        .value_counts()
-        .head(top_n)
-        .reset_index()
-    )
-    counts.columns = [column, "Total"]
-
-    max_value = counts["Total"].max()
-    colors = [
-        COLOR_DESTAQUE if value == max_value else "#7FA8C9"
-        for value in counts["Total"]
-    ]
-
-    fig = go.Figure(
-        go.Bar(
-            x=counts["Total"],
-            y=counts[column],
-            orientation="h",
-            marker_color=colors,
-            text=counts["Total"],
-            textposition="outside",
-            textfont={"size": 12, "color": "#374151"},
-            hovertemplate="%{y}<br>Total: %{x}<extra></extra>",
-        )
-    )
-
-    fig.update_layout(
-        title={
-            "text": title,
-            "x": 0,
-            "xanchor": "left",
-            "font": {"size": 15, "color": "#1F2937"},
-        },
-        xaxis={"visible": False},
-        yaxis={
-            "autorange": "reversed",
-            "tickfont": {"size": 11, "color": "#374151"},
-        },
-        margin={"l": 10, "r": 50, "t": 45, "b": 20},
-    )
-
-    return _clean_layout(fig, height=max(320, 38 * len(counts) + 90))
+    counts = category_counts(df, column).head(top_n)
+    fig = go.Figure(go.Bar(x=counts.values, y=counts.index, orientation="h", text=counts.values,
+                           textposition="outside", cliponaxis=False, marker_color=BLUE,
+                           hovertemplate="%{y}<br>%{x:.0f} ocorrências<extra></extra>"))
+    fig.update_yaxes(autorange="reversed", automargin=True)
+    fig.update_xaxes(visible=False, range=[0, max(1, counts.max() if len(counts) else 1) * 1.2])
+    return style(fig, title, max(340, len(counts) * 34 + 110))
 
 
 def render_donut_chart(df, column, title, top_n=10, show_others=True):
-    counts = df[column].value_counts()
+    counts = category_counts(df, column)
+    top = counts.head(top_n).copy()
+    if show_others and len(counts) > top_n:
+        top.loc["Outras"] = counts.iloc[top_n:].sum()
+    palette = px.colors.qualitative.Safe
+    colors = ["#CBD5E1" if label == "Outras" else palette[i % len(palette)] for i, label in enumerate(top.index)]
+    fig = go.Figure(go.Pie(labels=top.index, values=top.values, hole=.65, sort=False,
+                           marker=dict(colors=colors), textinfo="percent",
+                           hovertemplate="%{label}<br>%{value:.0f} ocorrências<br>%{percent}<extra></extra>"))
+    fig.add_annotation(text=f"{int(top.sum())}<br>ocorrências", showarrow=False)
+    return style(fig, title)
 
-    if len(counts) > top_n and show_others:
-        top = counts.head(top_n)
-        others = pd.Series({"Outras": counts.iloc[top_n:].sum()})
-        counts = pd.concat([top, others])
-    else:
-        counts = counts.head(top_n)
 
-    total = counts.sum()
-
-    colors = [
-        COLOR_NEUTRO if name == "Outras" else None
-        for name in counts.index
-    ]
-
-    fig = go.Figure(
-        go.Pie(
-            labels=counts.index,
-            values=counts.values,
-            hole=0.62,
-            marker={
-                "colors": colors,
-                "line": {"color": "#FFFFFF", "width": 2},
-            },
-            textinfo="percent",
-            textposition="outside",
-            textfont={"size": 11, "color": "#374151"},
-            hovertemplate="%{label}<br>%{value} tarefas<br>%{percent}<extra></extra>",
-            sort=False,
-        )
-    )
-
-    fig.add_annotation(
-        text=f"<b>{total}</b><br><span style='font-size:11px;color:#6B7280'>tarefas</span>",
-        showarrow=False,
-        font={"size": 20, "color": "#1F2937"},
-    )
-
-    fig.update_layout(
-        title={
-            "text": title,
-            "x": 0,
-            "xanchor": "left",
-            "font": {"size": 15, "color": "#1F2937"},
-        },
-        legend={
-            "orientation": "v",
-            "yanchor": "middle",
-            "y": 0.5,
-            "xanchor": "left",
-            "x": 1.02,
-            "font": {"size": 11},
-        },
-        margin={"l": 20, "r": 120, "t": 45, "b": 20},
-    )
-
-    return _clean_layout(fig, height=380)
+def render_cut_donut(universe, cut):
+    total, selected = len(universe), len(cut)
+    if selected > total or not set(cut.index).issubset(set(universe.index)):
+        raise ValueError("O recorte precisa estar contido no universo.")
+    fig = go.Figure(go.Pie(labels=["Recorte selecionado", "Restante do universo"],
+                           values=[selected, total-selected], hole=.68, sort=False,
+                           marker=dict(colors=[BLUE, "#DCE4EC"]), textinfo="label+percent"))
+    pct = selected / total * 100 if total else 0
+    fig.add_annotation(text=f"{pct:.1f}%<br>{selected} de {total} tarefas".replace(".", ","), showarrow=False)
+    return style(fig, "Participação do recorte no universo")
