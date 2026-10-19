@@ -307,24 +307,30 @@ def load_and_normalize_data():
     else:
         df["Peça"] = pd.NA
 
-    df["Tipo"] = (
-        df["Tipo"]
-        .astype(str)
-        .str.strip()
-        .str.title()
-    )
+    def _clean_text(value):
+    if pd.isna(value):
+        return ""
 
-    df["Máquina"] = df["Máquina"].astype(str).str.strip()
-    df["Técnico"] = df["Técnico"].astype(str).str.strip()
+    return str(value).strip()
 
-    for column in [
-        "Cliente",
-        "Cidade",
-        "Região",
-        "Estado",
-    ]:
-        df[column] = df[column].astype(str).str.strip()
 
+df["Tipo"] = (
+    df["Tipo"]
+    .apply(_clean_text)
+    .str.title()
+)
+
+df["Máquina"] = df["Máquina"].apply(_clean_text)
+df["Técnico"] = df["Técnico"].apply(_clean_text)
+
+for column in [
+    "Cliente",
+    "Cidade",
+    "Região",
+    "Estado",
+]:
+    df[column] = df[column].apply(_clean_text)
+    
     df["Problema"] = df["Problema"].fillna("Não informado")
     df["Peça"] = df["Peça"].fillna("Nenhuma")
 
