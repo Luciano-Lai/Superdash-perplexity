@@ -1,104 +1,47 @@
-import streamlit as st
+from html import escape
 import pandas as pd
+import streamlit as st
+from data_loader import clean, norm
+
+INVALID = {"", "nenhuma", "nenhum", "nao informado", "nan", "none", "<na>"}
+
+
+def occurrence_frame(df, column):
+    out = df.loc[df["Tipo"].eq("Corretiva")].copy()
+    out[column] = out[column].map(lambda v: clean(v).replace("\n", ";").split(";"))
+    out = out.explode(column)
+    out[column] = out[column].map(clean)
+    return out.loc[~out[column].map(norm).isin(INVALID)].copy()
 
 
 def calculate_kpis(df):
     total = len(df)
-
-    preventivas = len(df[df["Tipo"] == "Preventiva"])
-    corretivas = len(df[df["Tipo"] == "Corretiva"])
-
-    if total > 0:
-        perc_preventivas = f"{(preventivas / total * 100):.1f}%"
-        perc_corretivas = f"{(corretivas / total * 100):.1f}%"
-    else:
-        perc_preventivas = "—"
-        perc_corretivas = "—"
-
-    maquinas = df["Máquina"].nunique()
-    tecnicos = df["Técnico"].nunique()
-
-    df_corretivas = df[df["Tipo"] == "Corretiva"]
-
-    em_garantia = len(
-        df_corretivas[df_corretivas["Garantia"] == "Dentro"]
-    )
-
-    fora_garantia = len(
-        df_corretivas[df_corretivas["Garantia"] == "Fora"]
-    )
-
-    problemas = (
-        df_corretivas["Problema"]
-        .dropna()
-        .astype(str)
-        .str.split(";")
-        .explode()
-        .str.strip()
-    )
-
-    problemas = problemas[
-        ~problemas.str.lower().isin([
-            "não informado",
-            "nao informado",
-        ])
-    ]
-
-    if problemas.empty:
-        problema_mais_frequente = "—"
-    else:
-        problema_mais_frequente = problemas.mode()[0]
-
-    pecas = (
-        df["Peça"]
-        .dropna()
-        .astype(str)
-        .str.split(";")
-        .explode()
-        .str.strip()
-    )
-
-    pecas = pecas[
-        ~pecas.str.lower().isin([
-            "nenhuma",
-            "não informado",
-            "nao informado",
-        ])
-    ]
-
-    if pecas.empty:
-        peca_mais_trocada = "—"
-    else:
-        peca_mais_trocada = pecas.mode()[0]
-
+    prev = int(df["Tipo"].eq("Preventiva").sum())
+    corr = df.loc[df["Tipo"].eq("Corretiva")]
+    def frequent(column):
+        counts = occurrence_frame(df, column)[column].value_counts()
+        return str(counts.index[0]) if not counts.empty else "—"
     return {
-        "Total de tarefas": total,
-        "Preventivas": preventivas,
-        "Corretivas": corretivas,
-        "% Preventivas": perc_preventivas,
-        "% Corretivas": perc_corretivas,
-        "Máquinas atendidas": maquinas,
-        "Técnicos envolvidos": tecnicos,
-        "Corretivas em garantia": em_garantia,
-        "Corretivas fora da garantia": fora_garantia,
-        "Problema mais frequente": problema_mais_frequente,
-        "Peça mais trocada": peca_mais_trocada,
+        "Total de tarefas": total, "Preventivas": prev, "Corretivas": len(corr),
+        "% Preventivas": f"{prev / total * 100:.1f}%".replace(".", ",") if total else "—",
+        "% Corretivas": f"{len(corr) / total * 100:.1f}%".replace(".", ",") if total else "—",
+        "Máquinas atendidas": df.loc[df["Máquina"].ne(""), "Máquina"].nunique(),
+        "Técnicos envolvidos": df.loc[df["Técnico"].ne(""), "Técnico"].nunique(),
+        "Corretivas em garantia": int(corr["Garantia"].eq("Dentro").sum()),
+        "Corretivas fora da garantia": int(corr["Garantia"].eq("Fora").sum()),
+        "Problema mais frequente": frequent("Problema"), "Peça mais trocada": frequent("Peça"),
     }
 
 
-def render_kpi_cards(selected_kpis, kpi_values):
-    if not selected_kpis:
-        return
-
-    for inicio in range(0, len(selected_kpis), 4):
-        grupo = selected_kpis[inicio:inicio + 4]
-        colunas = st.columns(len(grupo))
-
-        for coluna, nome_kpi in zip(colunas, grupo):
-            valor = kpi_values.get(nome_kpi, "—")
-
-            with coluna:
-                st.metric(
-                    label=nome_kpi,
-                    value=valor,
-                )
+def render_kpi_cards(selected_kpis, values):
+    for start in range(0, len(selected_kpis), 4):
+        group = selected_kpis[start:start + 4]
+        columns = st.columns(4)
+        for col, name in zip(columns, group):
+            value = values.get(name, "—")
+            is_text = name in {"Problema mais frequente", "Peça mais trocada"}
+            display = f"{int(value):,}".replace(",", ".") if isinstance(value, (int, float)) else str(value)
+            size = "1rem" if is_text else "2rem"
+            html = (f'<div class="kpi-card"><div class="kpi-label">{escape(name)}</div>'
+                    f'<div class="kpi-value" style="font-size:{size}">{escape(display)}</div></div>')
+            col.markdown(html, unsafe_allow_html=True)
