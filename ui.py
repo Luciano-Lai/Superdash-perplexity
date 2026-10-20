@@ -3,7 +3,9 @@ import math
 import unicodedata
 import streamlit as st
 
-from charts import render_evolution_chart, render_horizontal_ranking, render_donut_chart, render_cut_donut
+from charts import (render_evolution_chart, render_horizontal_ranking, render_donut_chart,
+                    render_cut_donut, render_pareto_chart, render_abc_donut, abc_table,
+                    category_counts)
 from filters import apply_filters, COLUMNS
 from kpis import calculate_kpis, render_kpi_cards, occurrence_frame
 from pdf_export import generate_pdf_report
@@ -171,6 +173,91 @@ def composition(c,title):
     registry(c,title,render_donut_chart(c["df"],"Tipo",title,10,True),{"Total de tarefas","Preventivas","Corretivas","% Preventivas","% Corretivas"})
 
 
+def _filter_column(column):
+    return "Máquina" if column=="Rótulo da máquina" else column
+
+
+def _category_rows(df,column,members):
+    if column in {"Problema","Peça"}:
+        data=occurrence_frame(df,column)
+    else:
+        data=df.loc[df[column].fillna("").astype(str).str.strip().ne("")].copy()
+    return data.loc[data[column].isin(members)].copy()
+
+
+def concentration(c,column,title,associated,kind=None,drilldown=()):
+    source=c["df"]
+    if kind: source=source.loc[source["Tipo"].eq(kind)]
+    if column not in source or source.empty:
+        st.info("Não há registros para "+title.lower()+".")
+        return
+    key=chart_key(c,title)
+    st.markdown("### "+title)
+    with st.expander("Ajustes — "+title):
+        base=widget("selectbox","Base da análise",key+"base",
+                    options=["Recorte atual","Universo de comparação"])
+        override=widget("checkbox","Definir Top N individual",key+"override",value=False)
+        n=widget("number_input","Top N individual",key+"n",min_value=1,max_value=100,value=10) if override else c["top"]
+        left,right=st.columns(2)
+        a=left.number_input("Limite da classe A (%)",min_value=50,max_value=95,value=80,step=1,key=key+"a")
+        b=right.number_input("Limite da classe B (%)",min_value=55,max_value=100,value=95,step=1,key=key+"b")
+        a,b=a/100,b/100
+        if b<=a: b=min(1.0,a+0.05)
+    analysis=source.copy()
+    highlight=None
+    if base=="Universo de comparação":
+        filter_column="Máquina" if column=="Rótulo da máquina" else column
+        universe=apply_filters(c["raw"],c["spec"],ignore=(filter_column,))
+        if kind: universe=universe.loc[universe["Tipo"].eq(kind)]
+        analysis=universe
+        highlight=set(category_counts(source,column).index)
+    counts=category_counts(analysis,column)
+    if counts.empty:
+        st.info("Não há categorias válidas para esta análise.")
+        return
+    abc=abc_table(counts,a,b)
+    pareto=render_pareto_chart(counts,title,n,highlight,a,b)
+    donut=render_abc_donut(abc,title+" — classes A, B e C")
+    left,right=st.columns([1.55,1])
+    with left: registry(c,title,pareto,associated)
+    with right: registry(c,title+" — classes",donut,associated)
+    total=int(abc["Quantidade"].sum())
+    st.caption(f"Base da ABC: {base.lower()} • {len(abc)} categorias • {total:,} {('tarefas' if column not in {'Problema','Peça'} else 'ocorrências').replace(',', '.')}".replace(",", "."))
+    summary=abc.groupby("Classe",as_index=False).agg(Categorias=("Categoria","nunique"),Volume=("Quantidade","sum"))
+    summary=summary.set_index("Classe").reindex(["A","B","C"]).fillna(0)
+    columns=st.columns(3)
+    for slot,letter in zip(columns,["A","B","C"]):
+        with slot:
+            volume=int(summary.loc[letter,"Volume"])
+            items=int(summary.loc[letter,"Categorias"])
+            share=volume/total*100 if total else 0
+            st.metric("Classe "+letter,f"{volume:,}".replace(",","."),
+                      f"{items} categoria(s) • {share:.1f}%")
+    available=[letter for letter in ["A","B","C"] if int(summary.loc[letter,"Categorias"])>0]
+    if not drilldown or not available:
+        return
+    st.markdown("#### Detalhar uma classe")
+    selected=widget("selectbox","Classe para detalhar",key+"class",options=available,
+                    format_func=lambda letter:"Classe "+letter)
+    members=abc.loc[abc["Classe"].eq(selected),"Categoria"].tolist()
+    subset=_category_source= _category_rows(analysis,column,members)
+    if subset.empty:
+        st.info("Não há registros na classe selecionada.")
+        return
+    st.caption(f"Classe {selected}: {len(members)} categoria(s) • {len(subset):,} registro(s) relacionados.".replace(",", "."))
+    breakdown=widget("selectbox","Analisar a classe por",key+"breakdown",
+                     options=[item for item in drilldown if item in subset.columns])
+    if not breakdown:
+        return
+    inner_counts=category_counts(subset,breakdown)
+    if inner_counts.empty:
+        st.info("Não há ocorrências válidas para este detalhamento.")
+        return
+    inner_title=(f"Classe {selected} — {breakdown.lower()}")
+    inner=render_pareto_chart(inner_counts,inner_title,c["top"],None,a,b)
+    registry(c,inner_title,inner,{"Corretivas"} if kind=="Corretiva" else {"Total de tarefas"})
+
+
 def norm_header(value):
     text=unicodedata.normalize("NFKD",str(value).strip().lower())
     return " ".join("".join(ch for ch in text if not unicodedata.combining(ch)).split())
@@ -230,7 +317,7 @@ def render_monitoramento():
     c=context("monitoramento","Monitoramento","Como está a operação? Visão consolidada de volume, composição e concentração de corretivas.")
     if c is None: return
     configuration(c,["Total de tarefas","Preventivas","Corretivas","% Preventivas","% Corretivas","Máquinas atendidas","Técnicos envolvidos"],
-                  ["Evolução da operação","Composição das manutenções","Equipamentos com mais corretivas","Recorte × universo"])
+                  ["Evolução da operação","Composição das manutenções","Equipamentos com mais corretivas","Concentração de corretivas por equipamento","Recorte × universo"])
     if "Evolução da operação" in c["selected"]:
         st.subheader("Ritmo da operação")
         evolution(c,"Evolução da operação")
@@ -239,6 +326,10 @@ def render_monitoramento():
         if "Composição das manutenções" in c["selected"]: composition(c,"Preventivas × corretivas")
     with right:
         if "Equipamentos com mais corretivas" in c["selected"]: ranking(c,"Rótulo da máquina","Equipamentos com mais corretivas",{"Corretivas","Máquinas atendidas"},"Corretiva")
+    if "Concentração de corretivas por equipamento" in c["selected"]:
+        concentration(c,"Rótulo da máquina","Concentração de corretivas por equipamento",
+                      {"Corretivas","Máquinas atendidas"},"Corretiva",
+                      ["Problema","Peça","Tarefa"])
     if "Recorte × universo" in c["selected"]: participation(c)
     finish(c)
 
@@ -247,7 +338,7 @@ def render_analise_tarefas():
     c=context("analise_tarefas","Análise de tarefas","O que foi feito? Serviços executados, responsáveis e volume ao longo do período.")
     if c is None: return
     configuration(c,["Total de tarefas","Preventivas","Corretivas","% Preventivas","% Corretivas","Técnicos envolvidos","Máquinas atendidas"],
-                  ["Serviços executados","Ritmo dos atendimentos","Distribuição por responsável","Distribuição por equipamento"])
+                  ["Serviços executados","Ritmo dos atendimentos","Distribuição por responsável","Distribuição por equipamento","Concentração de tarefas por equipamento","Concentração de tarefas por responsável"])
     if "Serviços executados" in c["selected"]: ranking(c,"Tarefa","Serviços executados",{"Total de tarefas","Preventivas","Corretivas"})
     if "Ritmo dos atendimentos" in c["selected"]: evolution(c,"Ritmo dos atendimentos")
     left,right=st.columns(2)
@@ -255,6 +346,14 @@ def render_analise_tarefas():
         if "Distribuição por responsável" in c["selected"]: ranking(c,"Técnico","Tarefas por responsável",{"Total de tarefas","Técnicos envolvidos"})
     with right:
         if "Distribuição por equipamento" in c["selected"]: ranking(c,"Rótulo da máquina","Tarefas por equipamento",{"Total de tarefas","Máquinas atendidas"})
+    if "Concentração de tarefas por equipamento" in c["selected"]:
+        concentration(c,"Rótulo da máquina","Concentração de tarefas por equipamento",
+                      {"Total de tarefas","Máquinas atendidas"},None,
+                      ["Tarefa","Técnico"])
+    if "Concentração de tarefas por responsável" in c["selected"]:
+        concentration(c,"Técnico","Concentração de tarefas por responsável",
+                      {"Total de tarefas","Técnicos envolvidos"},None,
+                      ["Rótulo da máquina","Tarefa"])
     finish(c)
 
 
@@ -262,7 +361,7 @@ def render_corretivas():
     c=context("corretivas","Corretivas","Quais falhas ocorreram e como foram tratadas? Apenas tarefas corretivas entram nesta página.",True)
     if c is None: return
     configuration(c,["Corretivas","Máquinas atendidas","Técnicos envolvidos","Problema mais frequente","Peça mais trocada","Corretivas em garantia","Corretivas fora da garantia"],
-                  ["Falhas relatadas","Peças utilizadas","Serviços corretivos","Equipamentos envolvidos","Evolução das corretivas"])
+                  ["Falhas relatadas","Peças utilizadas","Serviços corretivos","Equipamentos envolvidos","Concentração de falhas por equipamento","Concentração de falhas por problema","Concentração de peças por equipamento","Evolução das corretivas"])
     left,right=st.columns(2)
     with left:
         if "Falhas relatadas" in c["selected"]: ranking(c,"Problema","Falhas relatadas",{"Corretivas","Problema mais frequente"})
@@ -270,6 +369,18 @@ def render_corretivas():
         if "Peças utilizadas" in c["selected"]: ranking(c,"Peça","Peças utilizadas",{"Corretivas","Peça mais trocada"})
     if "Serviços corretivos" in c["selected"]: ranking(c,"Tarefa","Serviços corretivos",{"Corretivas"})
     if "Equipamentos envolvidos" in c["selected"]: ranking(c,"Rótulo da máquina","Equipamentos envolvidos em corretivas",{"Corretivas","Máquinas atendidas"})
+    if "Concentração de falhas por equipamento" in c["selected"]:
+        concentration(c,"Rótulo da máquina","Concentração de falhas por equipamento",
+                      {"Corretivas","Máquinas atendidas"},"Corretiva",
+                      ["Problema","Peça","Tarefa"])
+    if "Concentração de falhas por problema" in c["selected"]:
+        concentration(c,"Problema","Concentração de falhas por problema",
+                      {"Corretivas","Problema mais frequente"},"Corretiva",
+                      ["Rótulo da máquina","Peça","Tarefa"])
+    if "Concentração de peças por equipamento" in c["selected"]:
+        concentration(c,"Peça","Concentração de peças por equipamento",
+                      {"Corretivas","Peça mais trocada"},"Corretiva",
+                      ["Rótulo da máquina","Problema","Tarefa"])
     if "Evolução das corretivas" in c["selected"]: evolution(c,"Evolução das corretivas")
     missing=c["df"]["Problema"].fillna("").astype(str).str.strip().isin(["","Não informado","Nao informado"])
     if missing.any(): st.warning(f"{int(missing.sum())} corretiva(s) sem problema válido preenchido. Não entram no ranking de falhas.")
@@ -291,13 +402,20 @@ def render_clientes_regioes():
         st.info("Nenhum atendimento corresponde ao refinamento local.")
         return
     dims=[col for col in available_columns if c["df"][col].fillna("").astype(str).str.strip().ne("").any()]
-    options=["Distribuição por "+col.lower() for col in dims]+["Composição local","Participação no universo"]
+    options=["Distribuição por "+col.lower() for col in dims]
+    options+=["Concentração por "+col.lower() for col in dims]
+    options+=["Composição local","Participação no universo"]
     configuration(c,["Total de tarefas","Máquinas atendidas","Preventivas","Corretivas","% Corretivas"],options)
     for i in range(0,len(dims),2):
         cols=st.columns(2)
         for slot,col in zip(cols,dims[i:i+2]):
             with slot:
                 if "Distribuição por "+col.lower() in c["selected"]: ranking(c,col,"Atendimentos por "+col.lower(),{"Total de tarefas","Máquinas atendidas"})
+    for col in dims:
+        if "Concentração por "+col.lower() in c["selected"]:
+            concentration(c,col,"Concentração por "+col.lower(),
+                          {"Total de tarefas","Máquinas atendidas"},None,
+                          ["Rótulo da máquina","Tarefa"])
     if "Composição local" in c["selected"]: composition(c,"Composição das manutenções no recorte local")
     if "Participação no universo" in c["selected"]: participation(c)
     finish(c)
