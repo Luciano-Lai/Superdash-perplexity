@@ -6,6 +6,12 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak, KeepTogether
 
 
+def _figure_image(fig, target_width=1100):
+    height = int(fig.layout.height or 650)
+    image = fig.to_image(format="png", width=target_width, height=height, scale=1)
+    return image, target_width, height
+
+
 def generate_pdf_report(kpi_dict, selected_kpis, chart_figs=None, charts_per_page=1):
     if not 1 <= charts_per_page <= 4:
         raise ValueError("Escolha de 1 a 4 gráficos por página.")
@@ -43,8 +49,9 @@ def generate_pdf_report(kpi_dict, selected_kpis, chart_figs=None, charts_per_pag
         chunk = entries[start:start+charts_per_page]
         cells = []
         for name, fig in chunk:
-            image_bytes = fig.to_image(format="png", width=1100, height=650, scale=1)
-            image = Image(io.BytesIO(image_bytes), width=cell_w-14, height=(cell_w-14)*650/1100)
+            image_bytes, source_width, source_height = _figure_image(fig)
+            proportional_height = (cell_w-14)*source_height/source_width
+            image = Image(io.BytesIO(image_bytes), width=cell_w-14, height=proportional_height)
             image._restrictSize(cell_w-14, cell_h-35)
             cells.append(KeepTogether([Paragraph(escape(name), styles["Normal"]), image]))
         cells += [""] * ((rows*columns)-len(cells))
