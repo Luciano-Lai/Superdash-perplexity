@@ -1799,8 +1799,12 @@ def render_maquinas():
         )
     )
 
-    codes = sorted(
-        base["Máquina"].unique()
+        codes = sorted(
+        base["Máquina"].unique(),
+        key=lambda code: (
+            norm_header(labels.get(code, code)),
+            str(code),
+        ),
     )
 
     mode = widget(
