@@ -269,11 +269,35 @@ def render_donut_chart(df, column, title, top_n=10, show_others=True):
     colors = ["#CBD5E1" if label == "Outras" else palette[i % len(palette)]
               for i, label in enumerate(top.index)]
 
-    fig = go.Figure(go.Pie(labels=top.index, values=top.values, hole=.65, sort=False,
-                           marker=dict(colors=colors), textinfo="percent",
-                           hovertemplate="%{label}<br>%{value:.0f} ocorrências<br>%{percent}<extra></extra>"))
-    fig.add_annotation(text=f"{int(top.sum())}<br>ocorrências", showarrow=False)
-    return style(fig, title)
+    fig = go.Figure(go.Pie(
+        labels=top.index,
+        values=top.values,
+        hole=.65,
+        sort=False,
+        marker=dict(colors=colors),
+        textinfo="percent",
+        textposition="outside",
+        automargin=True,
+        hovertemplate="%{label}<br>%{value:.0f} ocorrências<br>%{percent}<extra></extra>"))
+
+    fig.add_annotation(
+        text=f"{int(top.sum())}<br>ocorrências",
+        showarrow=False)
+
+    quantity = len(top)
+    height = max(420, min(1000, quantity * 48 + 240))
+
+    fig.update_layout(
+        legend=dict(
+            orientation="v",
+            yanchor="middle",
+            y=0.5,
+            xanchor="left",
+            x=1.02,
+            font=dict(size=12)),
+        margin=dict(l=30, r=190, t=80, b=60))
+
+    return style(fig, title, height)
 
 
 def render_cut_donut(universe, cut):
