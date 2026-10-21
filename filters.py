@@ -44,7 +44,22 @@ def render_sidebar_filters(df):
         spec["Tipo"] = st.selectbox("Tipo de manutenção", ["Todas", "Preventiva", "Corretiva"], key="dash_type")
         labels = dict(zip(df["Máquina"], df["Seleção da máquina"]))
         for column in COLUMNS:
-            options = sorted(v for v in df[column].dropna().unique() if str(v).strip())
+                       options = [
+                value
+                for value in df[column].dropna().unique()
+                if str(value).strip()
+            ]
+
+            if column == "Máquina":
+                options = sorted(
+                    options,
+                    key=lambda code: (
+                        str(labels.get(code, code)).casefold(),
+                        str(code),
+                    ),
+                )
+            else:
+                options = sorted(options)
             if not options:
                 spec[column] = []
                 st.caption(f"{column}: sem cadastro na fonte.")
