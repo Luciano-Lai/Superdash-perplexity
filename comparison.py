@@ -24,8 +24,7 @@ def comparison_evolution(a, b, label_a, label_b, period, granularity="Mensal"):
         valid = data.loc[data["Data da tarefa"].notna()]
         counts = valid.groupby(valid["Data da tarefa"].dt.to_period(frequency)).size().reindex(periods, fill_value=0)
         maximum = max(maximum, int(counts.max()) if len(counts) else 0)
-        fig.add_scatter(x=periods.start_time, y=counts.values, name=str(label), mode="lines+markers",
-                       line=dict(color=color, width=3))
+        fig.add_scatter(x=periods.start_time, y=counts.values, name=str(label), mode="lines+markers", line=dict(color=color, width=3))
     fig.update_layout(yaxis=dict(title="Tarefas", **integer_axis(maximum)))
     fig.update_traces(hovertemplate="%{x|%d/%m/%Y}<br>%{y:.0f} tarefas<extra>%{fullData.name}</extra>")
     fig.update_xaxes(tickformat="%d/%m/%Y", title=None)
@@ -33,16 +32,14 @@ def comparison_evolution(a, b, label_a, label_b, period, granularity="Mensal"):
 
 
 def comparison_bars(a, b, label_a, label_b):
-    categories = ["Total de tarefas", "Preventivas", "Corretivas"]
     fig, maximum = go.Figure(), 0
     for data, label, color in zip([a, b], [label_a, label_b], COLORS):
         counts = [len(data), int(data["Tipo"].eq("Preventiva").sum()), int(data["Tipo"].eq("Corretiva").sum())]
         maximum = max(maximum, max(counts))
-        fig.add_bar(x=categories, y=counts, name=str(label), marker_color=color,
-                    text=counts, textposition="outside", cliponaxis=False,
-                    hovertemplate="%{x}<br>%{y:.0f} tarefas<extra>%{fullData.name}</extra>")
-    fig.update_layout(barmode="group", bargap=0.25,
-                      yaxis=dict(title="Tarefas", **integer_axis(maximum * 1.22)))
+        fig.add_bar(x=["Total de tarefas", "Preventivas", "Corretivas"], y=counts, name=str(label),
+            marker_color=color, text=counts, textposition="outside", cliponaxis=False,
+            hovertemplate="%{x}<br>%{y:.0f} tarefas<extra>%{fullData.name}</extra>")
+    fig.update_layout(barmode="group", bargap=0.25, yaxis=dict(title="Tarefas", **integer_axis(maximum * 1.22)))
     return revise_bar_labels(style(fig, "Volume de manutenção — A × B", 540))
 
 
